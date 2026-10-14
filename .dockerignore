@@ -1,0 +1,6 @@
+**
+!src/
+!src/DemoWeb/
+!src/DemoWeb/**
+src/**/bin/
+src/**/obj/

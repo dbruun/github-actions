@@ -1,0 +1,161 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Branch quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore src/DemoWeb/DemoWeb.csproj
+      - name: Verify formatting and coding conventions
+        run: dotnet format src/DemoWeb/DemoWeb.csproj --verify-no-changes --no-restore
+      - name: Build with analyzers and warnings as errors
+        run: dotnet publish src/DemoWeb/DemoWeb.csproj --configuration Release --no-restore --output "$RUNNER_TEMP/publish"
+      - name: Smoke-test the published application
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet "$RUNNER_TEMP/publish/DemoWeb.dll" --urls http://127.0.0.1:8080 &
+          app_pid=$!
+          trap 'kill "$app_pid"; wait "$app_pid" || true' EXIT
+          bash tests/smoke.sh http://127.0.0.1:8080
+      - name: Build and smoke-test the container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --tag demo-web:ci .
+          container_id=$(docker run --detach --publish 127.0.0.1:8081:8080 demo-web:ci)
+          trap 'docker rm --force "$container_id" >/dev/null' EXIT
+          bash tests/smoke.sh http://127.0.0.1:8081
+
+  deploy:
+    name: Deploy to Azure
+    needs: quality
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: demo
+    concurrency:
+      group: azure-container-app-demo
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_CONTAINER_REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+      AZURE_CONTAINER_APP_ENVIRONMENT: ${{ vars.AZURE_CONTAINER_APP_ENVIRONMENT }}
+      AZURE_CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID \
+            AZURE_RESOURCE_GROUP AZURE_CONTAINER_REGISTRY \
+            AZURE_CONTAINER_APP_ENVIRONMENT AZURE_CONTAINER_APP; do
+            [[ -n "${!name}" ]] || { echo "::error::Missing environment variable: $name"; exit 1; }
+          done
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@eec3c95657c1536435858eda1f3ff5437fee8474 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify Azure resources before deployment
+        id: resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors
+          [[ "$(az account show --query tenantId --output tsv)" == "$AZURE_TENANT_ID" ]]
+          az group show --name "$AZURE_RESOURCE_GROUP" --output none
+          registry=$(az acr show --name "$AZURE_CONTAINER_REGISTRY" --resource-group "$AZURE_RESOURCE_GROUP")
+          environment=$(az containerapp env show --name "$AZURE_CONTAINER_APP_ENVIRONMENT" --resource-group "$AZURE_RESOURCE_GROUP")
+          app=$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP")
+          server=$(jq -r '.loginServer' <<< "$registry")
+          environment_id=$(jq -r '.id' <<< "$environment")
+          jq -e '.provisioningState == "Succeeded" and .policies.azureADAuthenticationAsArmPolicy.status == "enabled"' <<< "$registry" >/dev/null
+          jq -e '.properties.provisioningState == "Succeeded"' <<< "$environment" >/dev/null
+          jq -e --arg environment "$environment_id" --arg server "$server" '
+            . as $app |
+            .properties.provisioningState == "Succeeded" and
+            ((.properties.managedEnvironmentId | ascii_downcase) == ($environment | ascii_downcase)) and
+            .properties.configuration.activeRevisionsMode == "Single" and
+            .properties.configuration.ingress.external == true and
+            .properties.configuration.ingress.targetPort == 8080 and
+            (.properties.template.containers | length) == 1 and
+            any(.properties.configuration.registries[]?;
+              .server == $server and
+              ((.identity == "system" and $app.identity.principalId != null) or
+               (.identity != null and $app.identity.userAssignedIdentities[.identity] != null)))
+          ' <<< "$app" >/dev/null || {
+            echo "::error::The app needs the configured environment, single-revision mode, external ingress on 8080, one container, and an attached managed identity for ACR."
+            exit 1
+          }
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+      - name: Build image in Azure Container Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr build --registry "$AZURE_CONTAINER_REGISTRY" \
+            --image "demo-web:$GITHUB_SHA" --file Dockerfile .
+      - name: Deploy the immutable image
+        env:
+          REGISTRY_SERVER: ${{ steps.resources.outputs.server }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest=$(az acr repository show --name "$AZURE_CONTAINER_REGISTRY" \
+            --image "demo-web:$GITHUB_SHA" --query digest --output tsv)
+          [[ "$digest" == sha256:* ]]
+          az containerapp update --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$REGISTRY_SERVER/demo-web@$digest" --output none
+      - name: Verify the deployed application
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=$(az containerapp show --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestRevisionName --output tsv)
+          for attempt in {1..30}; do
+            state=$(az containerapp revision show --name "$AZURE_CONTAINER_APP" \
+              --resource-group "$AZURE_RESOURCE_GROUP" --revision "$revision" \
+              --query properties.runningState --output tsv)
+            [[ "$state" == "Running" ]] && break
+            echo "Waiting for revision $revision: $state (attempt $attempt/30)"
+            sleep 10
+          done
+          [[ "$state" == "Running" ]] || { echo "::error::New revision did not become ready: $revision ($state)"; exit 1; }
+          ready_revision=$(az containerapp show --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestReadyRevisionName --output tsv)
+          [[ "$ready_revision" == "$revision" ]]
+          fqdn=$(az containerapp show --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn --output tsv)
+          [[ -n "$fqdn" ]]
+          bash tests/smoke.sh "https://$fqdn"
+          printf '### Deployment\n- URL: https://%s\n- Commit: %s\n- Revision: %s\n' \
+            "$fqdn" "$GITHUB_SHA" "$revision" >> "$GITHUB_STEP_SUMMARY"
