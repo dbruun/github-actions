@@ -3,7 +3,9 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
-app.MapGet("/", () => "Hello from Azure Container Apps!");
+app.MapGet("/", DemoWeb.HomeEndpoint.GetGreeting);
 app.MapHealthChecks("/health");
 
 app.Run();
+
+public partial class Program;

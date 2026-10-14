@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | 00–05 | Explain the architecture | PR → quality gate → main → protected environment → OIDC → preflight → ACR → Container App |
 | 05–12 | Tour and run the app | Show `Program.cs`, `/health`, strict compiler/analyzer settings and the non-root Dockerfile; run the README local smoke check |
-| 12–22 | Demonstrate branch health | Open the prepared PR with a formatting error; show `Branch quality` failing and deployment skipped; fix with `dotnet format`, push and show green checks |
+| 12–22 | Demonstrate branch health | Open the prepared PR with a formatting error or mismatched greeting test; show `Branch quality` failing and deployment skipped; fix formatting or behavior/test expectations, push and show green checks |
 | 22–30 | Explain trust and resources | Show environment branch restrictions/approval, federated issuer/subject/audience, separate deployment/runtime identities and RBAC; inspect existing Azure resources |
 | 30–42 | Merge and deploy | Review/merge the PR, watch quality rerun, approve `demo`, then follow resource verification, ACR build, digest deployment and revision readiness |
 | 42–48 | Verify the result | Open the run-summary HTTPS URL; show `/health`, the updated greeting, ACR SHA tag and the new ready Container App revision |

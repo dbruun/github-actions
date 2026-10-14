@@ -5,7 +5,7 @@ Azure Container App. Authentication uses GitHub OIDC, not a client secret or
 registry password.
 
 ```text
-Pull request → Branch quality (format, analyzers, build, HTTP + container smoke checks)
+Pull request → Branch quality (format, unit + endpoint tests, analyzers, build, HTTP + container smoke checks)
 Merge to main → Branch quality → demo environment approval → OIDC login
               → verify Azure resources → ACR build → deploy image digest → health checks
 ```
@@ -20,8 +20,9 @@ Install the .NET 10 SDK, Bash and curl; Docker is needed for container checks.
 From the repository root:
 
 ```bash
-dotnet restore src/DemoWeb/DemoWeb.csproj
-dotnet format src/DemoWeb/DemoWeb.csproj --verify-no-changes --no-restore
+dotnet restore DemoWeb.sln
+dotnet format DemoWeb.sln --verify-no-changes --no-restore
+dotnet test tests/DemoWeb.Tests/DemoWeb.Tests.csproj --configuration Release --no-restore
 dotnet publish src/DemoWeb/DemoWeb.csproj -c Release -o /tmp/demo-web
 dotnet /tmp/demo-web/DemoWeb.dll --urls http://localhost:8080
 # In another terminal:
@@ -34,6 +35,14 @@ docker run --rm -p 8080:8080 demo-web:local
 # In another terminal:
 bash tests/smoke.sh http://localhost:8080
 ```
+
+The Docker build context excludes local `bin` and `obj` directories so Windows
+build outputs cannot overwrite the Linux container's restore artifacts.
+
+The xUnit test project includes a greeting-handler unit test and in-process HTTP
+tests for `/` and `/health`. The workflow runs these tests in `Branch quality`;
+a failing test fails that job and blocks `Deploy to Azure` through `needs: quality`.
+When changing the greeting, update both the test expectations and `tests/smoke.sh`.
 
 ## Azure setup (before the live demo)
 
@@ -97,11 +106,15 @@ GitHub deployment. In the Azure portal, add a federated credential with:
 | Field | Value |
 | --- | --- |
 | Issuer | `https://token.actions.githubusercontent.com` |
-| Subject | `repo:dbruun/github-actions:environment:demo` |
+| Subject | `repo:dbruun@41097489/github-actions@1418213844:environment:demo` |
 | Audience | `api://AzureADTokenExchange` |
 
-The subject must match the actual repository owner/name and GitHub environment
-exactly. No client secret is required. Assign these roles to the deployment
+The subject must exactly match the `subject claim` printed by the workflow's
+Azure login step. This repository presents owner and repository IDs alongside
+their names; do not substitute the older name-only subject
+`repo:dbruun/github-actions:environment:demo`. For a different repository, use
+its actual subject claim rather than copying these IDs.
+No client secret is required. Assign these roles to the deployment
 service principal (not the runtime image-pull identity):
 
 | Scope | Role | Purpose |
