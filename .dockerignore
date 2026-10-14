@@ -2,5 +2,7 @@
 !src/
 !src/DemoWeb/
 !src/DemoWeb/**
-src/**/bin/
-src/**/obj/
+src/DemoWeb/bin
+src/DemoWeb/obj
+**/bin
+**/obj

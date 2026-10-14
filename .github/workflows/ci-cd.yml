@@ -23,9 +23,11 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Restore
-        run: dotnet restore src/DemoWeb/DemoWeb.csproj
+        run: dotnet restore DemoWeb.sln
       - name: Verify formatting and coding conventions
-        run: dotnet format src/DemoWeb/DemoWeb.csproj --verify-no-changes --no-restore
+        run: dotnet format DemoWeb.sln --verify-no-changes --no-restore
+      - name: Run unit and endpoint tests
+        run: dotnet test tests/DemoWeb.Tests/DemoWeb.Tests.csproj --configuration Release --no-restore
       - name: Build with analyzers and warnings as errors
         run: dotnet publish src/DemoWeb/DemoWeb.csproj --configuration Release --no-restore --output "$RUNNER_TEMP/publish"
       - name: Smoke-test the published application
@@ -91,19 +93,28 @@ jobs:
         run: |
           set -euo pipefail
           az extension add --name containerapp --upgrade --only-show-errors
-          [[ "$(az account show --query tenantId --output tsv)" == "$AZURE_TENANT_ID" ]]
+          [[ "$(az account show --query tenantId --output tsv)" == "$AZURE_TENANT_ID" ]] || {
+            echo "::error::Signed-in Azure tenant does not match AZURE_TENANT_ID."
+            exit 1
+          }
           az group show --name "$AZURE_RESOURCE_GROUP" --output none
           registry=$(az acr show --name "$AZURE_CONTAINER_REGISTRY" --resource-group "$AZURE_RESOURCE_GROUP")
           environment=$(az containerapp env show --name "$AZURE_CONTAINER_APP_ENVIRONMENT" --resource-group "$AZURE_RESOURCE_GROUP")
           app=$(az containerapp show --name "$AZURE_CONTAINER_APP" --resource-group "$AZURE_RESOURCE_GROUP")
           server=$(jq -r '.loginServer' <<< "$registry")
           environment_id=$(jq -r '.id' <<< "$environment")
-          jq -e '.provisioningState == "Succeeded" and .policies.azureADAuthenticationAsArmPolicy.status == "enabled"' <<< "$registry" >/dev/null
+          jq -e '.provisioningState == "Succeeded" and .policies.azureAdAuthenticationAsArmPolicy.status == "enabled"' <<< "$registry" >/dev/null || {
+            echo "::error::The registry must be successfully provisioned with ARM-audience authentication enabled."
+            exit 1
+          }
           jq -e '.roleAssignmentMode == "LegacyRegistryPermissions"' <<< "$registry" >/dev/null || {
             echo "::error::This demo requires an RBAC-only registry; ABAC mode does not honor AcrPull."
             exit 1
           }
-          jq -e '.properties.provisioningState == "Succeeded"' <<< "$environment" >/dev/null
+          jq -e '.properties.provisioningState == "Succeeded"' <<< "$environment" >/dev/null || {
+            echo "::error::The Container Apps environment is not successfully provisioned."
+            exit 1
+          }
           jq -e --arg environment "$environment_id" --arg server "$server" '
             . as $app |
             .properties.provisioningState == "Succeeded" and

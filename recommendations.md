@@ -8,7 +8,7 @@ deployment and smoke checks. Add these next, in priority order:
 | 1 | CodeQL for C# and GitHub Actions | Pull requests, main, weekly | Catch code and workflow security weaknesses before deployment |
 | 1 | Dependency review plus Dependabot updates | Pull requests; weekly updates | Block vulnerable dependencies and keep SHA-pinned actions and .NET container images current |
 | 1 | Secret scanning and push protection (repository settings) | Every push | Prevent credential leaks; OIDC removes deployment secrets but not every possible secret |
-| 1 | Unit and integration tests with coverage | Pull requests before deployment | Add behavior-focused tests when the app grows beyond these two smoke-tested endpoints |
+| 1 | Expand unit and integration tests; add coverage | Pull requests before deployment | Extend the existing greeting unit test and endpoint tests as the app grows; track coverage for new behavior |
 | 2 | Container vulnerability scan, e.g. Trivy | After image build, before update | Scan the exact image digest; fail on an agreed severity policy |
 | 2 | SBOM generation and GitHub artifact attestations | Image build | Record image contents and provenance; grant attestation permissions only to the build job |
 | 2 | Bicep validation/what-if and a separately approved provisioning workflow | Infrastructure pull requests / manual approval | Make Azure setup reproducible without giving every deployment resource-creation rights |
