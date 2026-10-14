@@ -62,7 +62,8 @@ az provider register --namespace Microsoft.OperationalInsights --wait
 az provider register --namespace Microsoft.ContainerRegistry --wait
 az extension add --name containerapp --upgrade
 az group create --name "$RG" --location "$LOCATION"
-az acr create --name "$ACR" --resource-group "$RG" --sku Basic --admin-enabled false
+az acr create --name "$ACR" --resource-group "$RG" --sku Basic \
+  --admin-enabled false --role-assignment-mode rbac
 az acr config authentication-as-arm update --registry "$ACR" --status enabled
 az containerapp env create --name "$ACA_ENV" --resource-group "$RG" --location "$LOCATION"
 az identity create --name demo-image-pull --resource-group "$RG"
@@ -106,15 +107,15 @@ service principal (not the runtime image-pull identity):
 | Scope | Role | Purpose |
 | --- | --- | --- |
 | Demo resource group | Reader | Verify resource group, registry, environment and app |
-| Demo registry | Contributor | Run ACR Tasks builds |
+| Demo registry | Container Registry Tasks Contributor | Run ACR Tasks builds |
 | Demo registry | AcrPull | Read image digest after the build |
 | Demo container app | Container Apps Contributor | Update the app and inspect revisions |
 
 For example, an administrator can assign each role using
 `az role assignment create --assignee-object-id "<deployment-service-principal-object-id>" --assignee-principal-type ServicePrincipal --role "<role>" --scope "<resource-id>"`.
 Use the service principal **object ID** for assignments, and the app registration
-**client ID** for GitHub configuration. For production, replace the registry
-Contributor role with a reviewed custom role limited to necessary build operations.
+**client ID** for GitHub configuration. For production, review whether a custom
+role can further limit build operations.
 
 ### GitHub configuration
 
@@ -152,7 +153,8 @@ checks. Deployments are serialized and an in-flight deployment is not cancelled.
 Before building or updating Azure resources, it verifies configuration, tenant,
 resource group, ACR, Container Apps environment and app. It also requires:
 
-- Successfully provisioned resources and ACR ARM-audience authentication enabled.
+- Successfully provisioned resources, RBAC-only registry permissions and ACR
+  ARM-audience authentication enabled.
 - The app in the specified environment, with one container and single-revision mode.
 - External ingress targeting port 8080 and an attached managed identity configured
   for the registry. Its `AcrPull` authorization is a setup prerequisite; an actual

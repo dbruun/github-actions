@@ -80,7 +80,7 @@ jobs:
             [[ -n "${!name}" ]] || { echo "::error::Missing environment variable: $name"; exit 1; }
           done
       - name: Sign in to Azure with OIDC
-        uses: azure/login@eec3c95657c1536435858eda1f3ff5437fee8474 # v2.3.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -99,6 +99,10 @@ jobs:
           server=$(jq -r '.loginServer' <<< "$registry")
           environment_id=$(jq -r '.id' <<< "$environment")
           jq -e '.provisioningState == "Succeeded" and .policies.azureADAuthenticationAsArmPolicy.status == "enabled"' <<< "$registry" >/dev/null
+          jq -e '.roleAssignmentMode == "LegacyRegistryPermissions"' <<< "$registry" >/dev/null || {
+            echo "::error::This demo requires an RBAC-only registry; ABAC mode does not honor AcrPull."
+            exit 1
+          }
           jq -e '.properties.provisioningState == "Succeeded"' <<< "$environment" >/dev/null
           jq -e --arg environment "$environment_id" --arg server "$server" '
             . as $app |
